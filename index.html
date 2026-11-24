@@ -1,0 +1,1386 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>3Dモデル指示ツール</title>
+<style>
+  :root {
+    --bg: #f3f4f6;
+    --panel: #ffffff;
+    --text: #1f2937;
+    --sub: #6b7280;
+    --line: #e5e7eb;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Yu Gothic UI", "Meiryo", sans-serif;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    padding: 10px 16px;
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  header h1 { font-size: 18px; margin: 0; }
+  header .hint { font-size: 13px; color: var(--sub); }
+  main { flex: 1; display: flex; min-height: 0; }
+  #view { flex: 1; position: relative; min-width: 0; overflow: hidden; }
+  /* 保存される範囲を示す枠。枠の外は暗くする */
+  #frame {
+    position: absolute; pointer-events: none;
+    border: 2px solid #f59e0b;
+    box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.28);
+  }
+  #panel {
+    width: 250px;
+    background: var(--panel);
+    border-left: 1px solid var(--line);
+    padding: 12px 14px;
+    overflow-y: auto;
+    font-size: 14px;
+  }
+  #panel h2 { font-size: 13px; color: var(--sub); margin: 14px 0 6px; font-weight: normal; }
+  #panel h2:first-child { margin-top: 0; }
+  .seg { display: flex; border: 1px solid #d1d5db; border-radius: 6px; overflow: hidden; }
+  .seg button {
+    flex: 1; border: 0; background: #fff; padding: 6px 0; font: inherit; cursor: pointer; color: var(--text);
+  }
+  .seg button + button { border-left: 1px solid #d1d5db; }
+  .seg button.on { background: #1f2937; color: #fff; }
+  .seg button.on.male { background: #3b82f6; }
+  .seg button.on.female { background: #ef4444; }
+  .person {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px; margin-bottom: 6px;
+    border: 2px solid transparent; border-radius: 8px; cursor: pointer;
+  }
+  .person.sel { border-color: #f59e0b; background: #fffbeb; }
+  .person .name { width: 3.2em; flex: none; }
+  .person .seg { flex: 1; }
+  .presets { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+  .presets button {
+    padding: 6px 2px; font: inherit; font-size: 13px; cursor: pointer;
+    background: #fff; border: 1px solid #d1d5db; border-radius: 6px; color: var(--text);
+  }
+  .presets button:hover { background: #fffbeb; border-color: #f59e0b; }
+  .presets button.on, .presets button.on:hover { background: #1f2937; border-color: #1f2937; color: #fff; }
+  .note { font-size: 12px; color: var(--sub); line-height: 1.6; margin: 6px 0 0; }
+  .row { display: flex; align-items: center; gap: 8px; }
+  .row input[type=range] { flex: 1; }
+  .row .val { width: 3.5em; text-align: right; font-variant-numeric: tabular-nums; }
+  @media (max-width: 700px) {
+    main { flex-direction: column; }
+    #view { min-height: 55vh; }
+    #panel { width: auto; border-left: 0; border-top: 1px solid var(--line); }
+  }
+  #view canvas { display: block; width: 100%; height: 100%; }
+  #loading {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px; color: var(--sub);
+  }
+  footer {
+    background: var(--panel);
+    border-top: 1px solid var(--line);
+    padding: 6px 16px;
+    font-size: 11px;
+    color: var(--sub);
+    line-height: 1.6;
+  }
+  footer a { color: inherit; }
+</style>
+</head>
+<body>
+<header>
+  <h1>3Dモデル指示ツール</h1>
+  <span class="hint">左ドラッグ：回す ／ ホイール：近づける・離す ／ 右ドラッグ：横にずらす</span>
+</header>
+<main>
+  <div id="view"><div id="frame"></div><div id="loading">素体を読み込み中…</div></div>
+  <aside id="panel">
+    <h2>人数</h2>
+    <div class="seg" id="countBtns">
+      <button data-n="1">1人</button><button data-n="2">2人</button><button data-n="3">3人</button>
+    </div>
+
+    <h2>人物（男性・女性）</h2>
+    <div id="personList"></div>
+    <p class="note">画面の人をクリックすると選べます。選んだ人は、そのままドラッグすると立ち位置を動かせます。</p>
+
+    <h2>選んだ人の向き</h2>
+    <div class="row">
+      <input type="range" id="rotSlider" min="-180" max="180" step="5" value="0">
+      <span class="val" id="rotVal">0°</span>
+    </div>
+
+    <h2>選んだ人の高さ（上下）</h2>
+    <div class="row">
+      <input type="range" id="heightSlider" min="-100" max="150" step="1" value="0">
+      <span class="val" id="heightVal">0cm</span>
+    </div>
+
+    <h2>ポーズ</h2>
+    <div id="presetBtns" class="presets"></div>
+    <p class="note">ポーズを選んでから、つまみやスライダーで調整できます。</p>
+    <p class="note">選んだ人の関節に黄色い丸（つまみ）が出ます。つまみをドラッグすると、その手前の部分が曲がります。<br>
+      例：ひじのつまみ → 二の腕が動く／手首のつまみ → ひじから先が動く</p>
+    <button id="resetPose" style="margin-top:8px;width:100%;padding:6px;font:inherit;cursor:pointer">選んだ人のポーズを元に戻す</button>
+    <button id="groundBtn" style="margin-top:6px;width:100%;padding:6px;font:inherit;cursor:pointer">足（いちばん低い所）を床に付ける</button>
+
+    <h2>関節の細かい調整</h2>
+    <select id="jointSel" style="width:100%;padding:5px;font:inherit"></select>
+    <p class="note">つまみをクリックしても選べます（選んだつまみは緑色になります）。</p>
+    <div id="jointSliders"></div>
+
+    <h2>手の形</h2>
+    <div id="handRows"></div>
+
+    <h2>小道具（椅子・テーブル）</h2>
+    <div class="row">
+      <button id="addChair" style="flex:1;padding:6px;font:inherit;cursor:pointer">椅子を追加</button>
+      <button id="addTable" style="flex:1;padding:6px;font:inherit;cursor:pointer">テーブルを追加</button>
+    </div>
+    <button id="addRoundTable" style="margin-top:4px;width:100%;padding:6px;font:inherit;cursor:pointer">丸テーブルを追加</button>
+    <div id="propList" style="margin-top:6px"></div>
+    <div id="propRotWrap" style="display:none">
+      <div class="note" style="margin:6px 0 2px">選んだ小道具の向き</div>
+      <div class="row">
+        <input type="range" id="propRot" min="-180" max="180" step="5" value="0">
+        <span class="val" id="propRotVal">0°</span>
+      </div>
+    </div>
+    <p class="note">画面の小道具をクリックで選び、ドラッグで動かせます。椅子は最大6脚、テーブル・丸テーブルはそれぞれ最大3台です。</p>
+
+    <h2>画像の保存</h2>
+    <div class="note" style="margin:0 0 4px">縦横の比率（枠の中が写ります）</div>
+    <div class="seg" id="aspectBtns">
+      <button data-a="16:9" class="on">16:9</button><button data-a="9:16">9:16</button><button data-a="1:1">1:1</button>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <span>背景の色</span>
+      <input type="color" id="bgColor" value="#f3f4f6" style="flex:1;height:28px;padding:0 2px">
+    </div>
+    <label class="row" style="margin-top:8px;cursor:pointer">
+      <input type="checkbox" id="showFloor" checked> 床とマス目を写す
+    </label>
+    <div class="note" style="margin:10px 0 4px">ファイルの形式</div>
+    <div class="seg" id="formatBtns">
+      <button data-f="png" class="on">PNG</button><button data-f="jpg">JPG</button>
+    </div>
+    <button id="saveImage" style="margin-top:10px;width:100%;padding:8px;font:inherit;cursor:pointer;background:#1f2937;color:#fff;border:0;border-radius:6px">画像を保存する</button>
+    <p class="note">つまみ・選択の輪は写りません。</p>
+
+    <h2>ポーズの保存・読み込み</h2>
+    <div class="row">
+      <button id="savePose" style="flex:1;padding:6px;font:inherit;cursor:pointer">保存する</button>
+      <button id="loadPose" style="flex:1;padding:6px;font:inherit;cursor:pointer">読み込む</button>
+    </div>
+    <input type="file" id="poseFile" accept=".json,application/json" hidden>
+    <p class="note">人数・男女・立ち位置・向き・ポーズ・カメラの位置・背景などを、まとめて1つのファイル（.json）にします。読み込むと、保存したときの状態に戻ります。</p>
+
+    <h2>3Dデータの書き出し</h2>
+    <button id="exportGlb" style="width:100%;padding:6px;font:inherit;cursor:pointer">glb で書き出す</button>
+    <p class="note">今のポーズのまま、人を 3D のファイル（.glb）にします。Blender などの 3D ソフトで開けます。骨も入っているので、開いた先でポーズを続けて直せます。</p>
+  </aside>
+</main>
+<footer>
+  素体：
+  女性「<a href="https://booth.pm/ja/items/1958825" target="_blank" rel="noopener">【無料】MMD用女性素体（リグ付き）</a>」射当ユウキ（プリメロ工房）／
+  男性「<a href="https://booth.pm/ja/items/3501696" target="_blank" rel="noopener">ローポリ 男性 FBX素体</a>」柚木零（柚木零の店）※どちらも加工して使用
+</footer>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
+import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+
+// ---------- 画面（シーン・カメラ・描画）の準備 ----------
+const view = document.getElementById('view');
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xf3f4f6);
+
+const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 100);
+camera.position.set(1.6, 1.5, 4.2);
+
+// preserveDrawingBuffer: あとで画像として保存するために画面の中身を残しておく
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.shadowMap.enabled = true;
+view.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 0.95, 0);
+controls.enableDamping = true;
+controls.update();
+
+// ---------- 光 ----------
+scene.add(new THREE.HemisphereLight(0xffffff, 0x9ca3af, 1.2));
+const sun = new THREE.DirectionalLight(0xffffff, 1.6);
+sun.position.set(3, 6, 4);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+const s = sun.shadow.camera;
+s.left = -4; s.right = 4; s.top = 4; s.bottom = -4;
+scene.add(sun);
+
+// ---------- 床 ----------
+const floor = new THREE.Mesh(
+  new THREE.PlaneGeometry(20, 20),
+  new THREE.MeshStandardMaterial({ color: 0xe5e7eb })
+);
+floor.rotation.x = -Math.PI / 2;
+floor.receiveShadow = true;
+scene.add(floor);
+const grid = new THREE.GridHelper(20, 40, 0xbfc5cc, 0xd5d9de);
+grid.position.y = 0.001;
+scene.add(grid);
+// 床を写さないときも、影だけは残す（影だけを描く透明な床）
+const shadowFloor = new THREE.Mesh(
+  new THREE.PlaneGeometry(20, 20),
+  new THREE.ShadowMaterial({ opacity: 0.18 })
+);
+shadowFloor.rotation.x = -Math.PI / 2;
+shadowFloor.receiveShadow = true;
+shadowFloor.visible = false;
+scene.add(shadowFloor);
+
+// ---------- 素体の設定 ----------
+// 男女で骨の名前がちがうので、ツールの中で使う共通の名前（左）と、
+// それぞれの素体の骨の名前（右）の対応表を作っておく。
+// ※ 読み込むと「.」などの記号は名前から消える（upper_arm.L → upper_armL）
+const MODELS = {
+  male: {
+    file: 'models/male.glb',
+    color: 0x3b82f6,
+    height: 1.75,
+    bones: {
+      hips: 'Hips', spine: 'Spine', chest: 'Chest', neck: 'Neck', head: 'Head',
+      shoulderL: 'shoulderL', upperArmL: 'upper_armL', lowerArmL: 'lower_armL', handL: 'handL',
+      shoulderR: 'shoulderR', upperArmR: 'upper_armR', lowerArmR: 'lower_armR', handR: 'handR',
+      upperLegL: 'upper_legL', lowerLegL: 'lower_legL', footL: 'footL',
+      upperLegR: 'upper_legR', lowerLegR: 'lower_legR', footR: 'footR',
+    },
+  },
+  female: {
+    file: 'models/female.glb',
+    color: 0xef4444,
+    height: 1.62,
+    bones: {
+      hips: '下半身', spine: '上半身', chest: '上半身2', neck: '首', head: '頭',
+      shoulderL: '左肩', upperArmL: '左腕', lowerArmL: '左ひじ', handL: '左手首',
+      shoulderR: '右肩', upperArmR: '右腕', lowerArmR: '右ひじ', handR: '右手首',
+      upperLegL: '左足', lowerLegL: '左ひざ', footL: '左足首',
+      upperLegR: '右足', lowerLegR: '右ひざ', footR: '右足首',
+    },
+  },
+};
+
+// 指の骨（根元から先へ3つ）。左右は L / R で入れ替える
+const FINGER_KEYS = ['thumb', 'index', 'middle', 'ring', 'little'];
+MODELS.male.fingers = side => ({
+  thumb:  ['Thumb_Proximal', 'Thumb_Intermediate', 'Thumb_Distal'].map(n => n + side),
+  index:  ['Index_Proximal', 'Index_Intermediate', 'Index_Distal'].map(n => n + side),
+  middle: ['Middle_Proximal', 'Middle_Intermediate', 'Middle_Distal'].map(n => n + side),
+  ring:   ['Ring_Proximal', 'Ring_Intermediate', 'Ring_Distal'].map(n => n + side),
+  little: ['Little_Proximal', 'Little_Intermediate', 'Little_Distal'].map(n => n + side),
+});
+MODELS.female.fingers = side => {
+  const s = side === 'L' ? '左' : '右';
+  return {
+    thumb:  ['親指０', '親指１', '親指２'].map(n => s + n),
+    index:  ['人指１', '人指２', '人指３'].map(n => s + n),
+    middle: ['中指１', '中指２', '中指３'].map(n => s + n),
+    ring:   ['薬指１', '薬指２', '薬指３'].map(n => s + n),
+    little: ['小指１', '小指２', '小指３'].map(n => s + n),
+  };
+};
+
+// 手の形：指ごとに、3つの関節をそれぞれ何度曲げるか
+const FIST = [80, 95, 60], THUMB_IN = [25, 35, 35];
+const HAND_SHAPES = {
+  open:  { name: '開く',   fingers: {} },
+  fist:  { name: '握る',   fingers: { thumb: THUMB_IN, index: FIST, middle: FIST, ring: FIST, little: FIST } },
+  point: { name: '指さし', fingers: { thumb: THUMB_IN, middle: FIST, ring: FIST, little: FIST } },
+  peace: { name: 'ピース', fingers: { thumb: THUMB_IN, ring: FIST, little: FIST }, spread: { index: 10, middle: -10 } },   // spread：＋で親指の方へ開く
+  good:  { name: 'グッド', fingers: { index: FIST, middle: FIST, ring: FIST, little: FIST } },   // 親指だけ伸ばす
+  // OK：親指と人さし指の先が触れる角度を計算で探した値。男女で骨の長さが違うので別々に持つ
+  ok: { name: 'OK', fingers: {}, spread: { middle: -5, ring: -12, little: -20 },   // 残りの3本は少し扇形に開く
+    byGender: {
+      male:   { fingers: { thumb: [-15, 20, 20], index: [30, 60, 42] }, spread: { thumb: 30, middle: -5, ring: -12, little: -20 } },
+      female: { fingers: { thumb: [-20, 30, 30], index: [60, 80, 56] }, spread: { thumb: 60, middle: -5, ring: -12, little: -20 } },
+    } },
+};
+
+// スライダーで動かせる関節（つまみをドラッグしたときに回る骨と同じ）
+const JOINT_KEYS = ['neck', 'spine', 'upperArmL', 'lowerArmL', 'upperArmR', 'lowerArmR',
+                    'upperLegL', 'lowerLegL', 'upperLegR', 'lowerLegR'];
+
+// 関節の角度を「体の向き」を基準にした3つの角度（度）で読み書きする。
+//   x … 前後に倒す回転（体の左右を通る軸）
+//   y … ひねる回転（上下の軸。腕や脚は下を向いているので、ひねりになる）
+//   z … 横に倒す回転（体の前後を通る軸）
+// 親の骨が動くと、軸も一緒に動く（本物の関節と同じ）。
+const _e = new THREE.Euler();
+const _q1 = new THREE.Quaternion(), _q2 = new THREE.Quaternion();
+function getJointAngles(person, key) {
+  const r = person.userData.jointRest[key];
+  const b = person.userData.bones[key];
+  // q = P × 今の回転 × 最初の回転の逆 × Pの逆
+  _q1.copy(r.P).multiply(b.quaternion).multiply(_q2.copy(r.local).invert()).multiply(_q2.copy(r.P).invert());
+  _e.setFromQuaternion(_q1, 'ZXY');
+  const d = THREE.MathUtils.radToDeg;
+  return { x: d(_e.x), y: d(_e.y), z: d(_e.z) };
+}
+function setJointAngles(person, key, a) {
+  const r = person.userData.jointRest[key];
+  const b = person.userData.bones[key];
+  const rad = THREE.MathUtils.degToRad;
+  _q1.setFromEuler(_e.set(rad(a.x), rad(a.y), rad(a.z), 'ZXY'));
+  // 今の回転 = Pの逆 × q × P × 最初の回転
+  b.quaternion.copy(_q2.copy(r.P).invert()).multiply(_q1).multiply(r.P).multiply(r.local);
+}
+
+// 素体ファイルは1回だけ読み込み、人を増やすときはコピー（クローン）して使う
+const loader = new GLTFLoader();
+const cache = {};
+function loadModel(gender) {
+  if (!cache[gender]) cache[gender] = loader.loadAsync(MODELS[gender].file);
+  return cache[gender];
+}
+
+// 骨を「指定した向き」に向ける。
+// bone の位置から child の位置へ向かう線が、dir（世界の向き）を向くように回す。
+const _a = new THREE.Vector3(), _b = new THREE.Vector3();
+const _q = new THREE.Quaternion(), _pq = new THREE.Quaternion(), _wq = new THREE.Quaternion();
+function aimBone(bone, child, dir) {
+  bone.updateWorldMatrix(true, true);
+  bone.getWorldPosition(_a);
+  child.getWorldPosition(_b);
+  const now = _b.sub(_a).normalize();
+  _q.setFromUnitVectors(now, dir.clone().normalize());   // 今の向き → なりたい向き
+  bone.getWorldQuaternion(_wq);
+  bone.parent.getWorldQuaternion(_pq);
+  // 世界での回転を、親から見た回転に直して入れる
+  bone.quaternion.copy(_pq.invert().multiply(_q.multiply(_wq)));
+  bone.updateWorldMatrix(false, true);
+}
+
+async function createPerson(gender) {
+  const def = MODELS[gender];
+  const gltf = await loadModel(gender);
+  const model = SkeletonUtils.clone(gltf.scene);
+  const material = new THREE.MeshStandardMaterial({ color: def.color, roughness: 0.6 });
+  model.traverse(o => {
+    if (o.isMesh) {
+      o.material = material;
+      o.castShadow = true;
+      o.frustumCulled = false;   // 骨で動かしたときに、画面の端で消えないようにする
+    }
+  });
+
+  // 共通の名前で骨を取り出せるようにする
+  const bones = {};
+  for (const [key, name] of Object.entries(def.bones)) {
+    const b = model.getObjectByName(name);
+    if (!b) console.warn('骨が見つかりません', gender, name);
+    bones[key] = b;
+  }
+
+  // 身長をそろえて、足を床に付ける
+  model.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(model, true);
+  const k = def.height / (box.max.y - box.min.y);
+  const root = new THREE.Group();
+  model.scale.setScalar(k);
+  model.position.y = -box.min.y * k;
+  root.add(model);
+  root.updateMatrixWorld(true);
+
+  // 最初の姿勢をそろえる：両腕を体の横に下ろす（少しだけ外に開く）
+  aimBone(bones.upperArmL, bones.lowerArmL, new THREE.Vector3(0.18, -1, 0));
+  aimBone(bones.upperArmR, bones.lowerArmR, new THREE.Vector3(-0.18, -1, 0));
+  aimBone(bones.lowerArmL, bones.handL, new THREE.Vector3(0.12, -1, 0.05));
+  aimBone(bones.lowerArmR, bones.handR, new THREE.Vector3(-0.12, -1, 0.05));
+
+  // 頭のてっぺんの目印（頭を動かすつまみの位置に使う）
+  const headTop = new THREE.Object3D();
+  const hp = bones.head.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0, 0.17, 0));
+  bones.head.add(headTop);
+  headTop.position.copy(bones.head.worldToLocal(hp));
+  bones.headTop = headTop;
+
+  // 最初の姿勢を覚えておく（「ポーズを元に戻す」で使う）
+  const rest = [];
+  model.traverse(o => { if (o.isBone) rest.push([o, o.quaternion.clone()]); });
+
+  // スライダー用：各関節の「最初の姿勢」を、体の向きを基準にして覚えておく
+  //   P     … 親の骨の向き（体から見た向き）
+  //   local … その骨の、親から見た回転
+  const jointRest = {};
+  for (const k of JOINT_KEYS) {
+    const b = bones[k];
+    jointRest[k] = { P: b.parent.getWorldQuaternion(new THREE.Quaternion()), local: b.quaternion.clone() };
+  }
+
+  // 指を曲げる向きを、腕を下ろした最初の姿勢で計算しておく。
+  // 手のひらは体の内側を向いているので、指先が「体の内側」へ動く向きに回せば、指が曲がる。
+  // 骨ごとの決まりのちがいに左右されないよう、世界での向きで求めてから、骨から見た向きに直す。
+  const fingers = { L: {}, R: {} };
+  for (const side of ['L', 'R']) {
+    const names = def.fingers(side);
+    const inward = new THREE.Vector3(side === 'L' ? -1 : 1, 0, 0);   // 体の内側
+    // 親指は、手のひらの真ん中（中指の根元）の方へ曲げる
+    const palm = model.getObjectByName(names.middle[0]).getWorldPosition(new THREE.Vector3());
+    for (const f of FINGER_KEYS) {
+      const chain = names[f].map(n => model.getObjectByName(n));
+      if (chain.some(b => !b)) { console.warn('指の骨が見つかりません', gender, names[f]); continue; }
+      let dir = new THREE.Vector3();
+      fingers[side][f] = chain.map((b, i) => {
+        const p = b.getWorldPosition(new THREE.Vector3());
+        // 次の関節（いちばん先は、子の骨があればそれ）への向き。無ければ1つ前の向きを使う
+        const next = chain[i + 1] || b.children.find(c => c.isBone);
+        if (next) dir = next.getWorldPosition(new THREE.Vector3()).sub(p).normalize();
+        const toward = f === 'thumb' ? palm.clone().sub(p).normalize() : inward.clone();
+        toward.addScaledVector(dir, -toward.dot(dir)).normalize();   // 指の向きと直角にする
+        const axisWorld = new THREE.Vector3().crossVectors(dir, toward).normalize();
+        const wq = b.getWorldQuaternion(new THREE.Quaternion()).invert();
+        // 指を横に開く（ピースの V の字）ときは、手のひらの向きを軸にして回す。
+        // 左右で向きが逆になるので、右手は符号を反対にして、＋がいつも「親指の方へ開く」にする
+        const spreadAxis = toward.clone().multiplyScalar(side === 'L' ? 1 : -1).applyQuaternion(wq);
+        return { bone: b, rest: b.quaternion.clone(), axis: axisWorld.applyQuaternion(wq), spreadAxis };
+      });
+    }
+  }
+
+  root.userData = { gender, bones, rest, jointRest, fingers, hands: { L: 'open', R: 'open' } };
+  return root;
+}
+
+// 手の形を変える（side は 'L' か 'R'）
+const _fq = new THREE.Quaternion();
+function setHand(root, side, shape) {
+  const fingers = root.userData.fingers[side];
+  const def = HAND_SHAPES[shape];
+  const byG = def.byGender && def.byGender[root.userData.gender];   // 男女で角度を変える形
+  const angles = (byG && byG.fingers) || def.fingers;
+  const spread = (byG && byG.spread) || def.spread || {};
+  const rad = THREE.MathUtils.degToRad;
+  for (const f of FINGER_KEYS) {
+    if (!fingers[f]) continue;
+    fingers[f].forEach((j, i) => {
+      const deg = angles[f] ? angles[f][i] : 0;
+      j.bone.quaternion.copy(j.rest);
+      if (i === 0 && spread[f]) j.bone.quaternion.multiply(_fq.setFromAxisAngle(j.spreadAxis, rad(spread[f])));
+      j.bone.quaternion.multiply(_fq.setFromAxisAngle(j.axis, rad(deg)));
+    });
+  }
+  root.userData.hands[side] = shape;
+}
+
+// ---------- 人物の管理（人数・男女・選択） ----------
+const persons = [];            // { root, gender }
+let selected = -1;             // 選んでいる人の番号（-1 は選んでいない）
+const SLOT_X = { 1: [0], 2: [-0.45, 0.45], 3: [-0.9, 0, 0.9] };   // 人数ごとの最初の立ち位置
+const DEFAULT_GENDER = ['male', 'female', 'male'];
+
+// 選んだ人の足元に出す、オレンジの輪
+const ring = new THREE.Mesh(
+  new THREE.RingGeometry(0.3, 0.36, 48),
+  new THREE.MeshBasicMaterial({ color: 0xf59e0b, side: THREE.DoubleSide })
+);
+ring.rotation.x = -Math.PI / 2;
+ring.position.y = 0.004;
+
+// ---------- 小道具（椅子・テーブル） ----------
+// 箱を組み合わせて作る。人と見分けやすいよう、薄い木の色にする
+const PROP_COLOR = 0xd6b48a;
+const SEAT_H = 0.42;            // 椅子の座面の高さ（m）。「椅子に座る」のおしりの高さ（男性約0.41・女性約0.45）に合わせた
+const PROP_DEFS = {
+  chair: { name: '椅子', max: 6, ring: 0.9 },
+  table: { name: 'テーブル', max: 3, ring: 2.2 },
+  roundTable: { name: '丸テーブル', max: 3, ring: 1.6 },
+};
+function box(group, mat, w, h, d, x, y, z) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+  m.position.set(x, y, z);
+  m.castShadow = true;
+  m.receiveShadow = true;
+  group.add(m);
+}
+// 椅子：座る人が前（＋z）を向く向きで作る。背もたれは後ろ（−z）
+function makeChair() {
+  const g = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({ color: PROP_COLOR, roughness: 0.8 });
+  const w = 0.44, d = 0.42, t = 0.04, leg = 0.035;
+  box(g, mat, w, t, d, 0, SEAT_H - t / 2, 0);                                   // 座面
+  box(g, mat, w, 0.42, 0.03, 0, SEAT_H + 0.25, -d / 2 + 0.015);                 // 背もたれ
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+    const x = sx * (w / 2 - leg / 2), z = sz * (d / 2 - leg / 2);
+    const h = sz < 0 ? SEAT_H + 0.46 : SEAT_H - t;                               // 後ろの脚は背もたれまで伸ばす
+    box(g, mat, leg, h, leg, x, h / 2, z);
+  }
+  return g;
+}
+// テーブル：高さ72cm、天板120×75cm
+function makeTable() {
+  const g = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({ color: PROP_COLOR, roughness: 0.8 });
+  const W = 1.2, D = 0.75, H = 0.72, t = 0.03, leg = 0.05;
+  box(g, mat, W, t, D, 0, H - t / 2, 0);
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+    box(g, mat, leg, H - t, leg, sx * (W / 2 - 0.06), (H - t) / 2, sz * (D / 2 - 0.06));
+  }
+  return g;
+}
+// 丸テーブル：高さ72cm、天板の直径90cm。真ん中の1本の柱と、丸い台で支える
+function makeRoundTable() {
+  const g = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({ color: PROP_COLOR, roughness: 0.8 });
+  const H = 0.72, t = 0.03;
+  const parts = [
+    [new THREE.CylinderGeometry(0.45, 0.45, t, 48), H - t / 2],          // 天板
+    [new THREE.CylinderGeometry(0.035, 0.035, H - t - 0.03, 16), (H - t) / 2],   // 柱
+    [new THREE.CylinderGeometry(0.25, 0.27, 0.03, 32), 0.015],          // 床に付く台
+  ];
+  for (const [geo, y] of parts) {
+    const m = new THREE.Mesh(geo, mat);
+    m.position.y = y;
+    m.castShadow = true;
+    m.receiveShadow = true;
+    g.add(m);
+  }
+  return g;
+}
+const PROP_MAKERS = { chair: makeChair, table: makeTable, roundTable: makeRoundTable };
+
+const props = [];               // { root, type }
+let selKind = 'person';         // 今選んでいるのが「人」か「小道具」か
+let selectedProp = -1;
+
+function addProp(type, x, z, rotDeg = 0) {
+  if (props.filter(p => p.type === type).length >= PROP_DEFS[type].max) return null;
+  const root = PROP_MAKERS[type]();
+  root.position.set(x, 0, z);
+  root.rotation.y = THREE.MathUtils.degToRad(rotDeg);
+  scene.add(root);
+  props.push({ root, type });
+  return root;
+}
+function removeProp(i) {
+  scene.remove(props[i].root);
+  props.splice(i, 1);
+  if (selKind === 'prop') { selKind = 'person'; selectedProp = -1; }
+  updateSelection();
+}
+function clearProps() {
+  while (props.length) scene.remove(props.pop().root);
+  selectedProp = -1;
+  if (selKind === 'prop') selKind = 'person';
+}
+function selectProp(i) {
+  selKind = 'prop';
+  selectedProp = i;
+  updateSelection();
+}
+
+// 読み込みは時間がかかるので、操作を順番待ちにして、同時に動かないようにする
+let queue = Promise.resolve();
+function enqueue(fn) {
+  queue = queue.then(fn).catch(err => console.error(err));
+  return queue;
+}
+
+async function setCount(n) {
+  while (persons.length > n) {              // 減らす：後ろの人から消す
+    const p = persons.pop();
+    scene.remove(p.root);
+  }
+  while (persons.length < n) {              // 増やす：空いている位置に足す
+    const i = persons.length;
+    const gender = DEFAULT_GENDER[i];
+    const root = await createPerson(gender);
+    // 候補の位置のうち、今いる人たちから一番離れている所に置く
+    let bestX = 0, bestD = -1;
+    for (const x of SLOT_X[n]) {
+      const d = Math.min(Infinity, ...persons.map(p => Math.hypot(p.root.position.x - x, p.root.position.z)));
+      if (d > bestD) { bestD = d; bestX = x; }
+    }
+    root.position.x = bestX;
+    scene.add(root);
+    persons.push({ root, gender });
+  }
+  if (selected >= n) selected = n - 1;
+  if (selected < 0) selected = 0;
+  updateSelection();
+}
+
+async function setGender(i, gender) {
+  const old = persons[i];
+  if (!old || old.gender === gender) return;
+  const root = await createPerson(gender);
+  root.position.copy(old.root.position);    // 立ち位置と向きは引き継ぐ
+  root.rotation.copy(old.root.rotation);
+  root.position.y = 0;                      // ポーズは気をつけに戻るので、高さも床に戻す
+  scene.remove(old.root);
+  scene.add(root);
+  persons[i] = { root, gender };
+  updateSelection();
+}
+
+function select(i) {
+  selected = i;
+  selKind = 'person';
+  updateSelection();
+}
+
+function updateSelection() {
+  ring.removeFromParent();
+  ring.scale.setScalar(1);
+  if (selKind === 'prop' && props[selectedProp]) {
+    // 小道具を選んだときは、その足元に輪を出す（大きさに合わせて広げる）
+    const pr = props[selectedProp];
+    ring.scale.setScalar(PROP_DEFS[pr.type].ring);
+    ring.position.y = 0.004;
+    pr.root.add(ring);
+  } else {
+    selKind = 'person';
+    const p = persons[selected];
+    if (p) p.root.add(ring);
+  }
+  renderPanel();
+  renderPropPanel();
+  updateJointSliders();
+  updateHandButtons();
+}
+
+// ---------- 右側のパネル ----------
+const countBtns = document.getElementById('countBtns');
+const personList = document.getElementById('personList');
+const rotSlider = document.getElementById('rotSlider');
+const rotVal = document.getElementById('rotVal');
+
+countBtns.addEventListener('click', e => {
+  const n = Number(e.target.dataset.n);
+  if (n) enqueue(() => setCount(n));
+});
+
+function renderPanel() {
+  for (const b of countBtns.children) b.classList.toggle('on', Number(b.dataset.n) === persons.length);
+  personList.innerHTML = '';
+  persons.forEach((p, i) => {
+    const row = document.createElement('div');
+    row.className = 'person' + (i === selected && selKind === 'person' ? ' sel' : '');
+    row.innerHTML = `<span class="name">${i + 1}人目</span>
+      <div class="seg">
+        <button class="male ${p.gender === 'male' ? 'on' : ''}" data-g="male">男性</button>
+        <button class="female ${p.gender === 'female' ? 'on' : ''}" data-g="female">女性</button>
+      </div>`;
+    row.addEventListener('click', e => {
+      select(i);
+      const g = e.target.dataset.g;
+      if (g) enqueue(() => setGender(i, g));
+    });
+    personList.appendChild(row);
+  });
+  const p = persons[selected];
+  const deg = p ? Math.round(THREE.MathUtils.radToDeg(p.root.rotation.y)) : 0;
+  rotSlider.value = deg;
+  rotVal.textContent = deg + '°';
+  rotSlider.disabled = !p;
+  updateHeightSlider();
+}
+
+// 高さのスライダー（cm）。ポーズを選んで床に付けたときなども、ここに反映する
+const heightSlider = document.getElementById('heightSlider');
+const heightVal = document.getElementById('heightVal');
+function updateHeightSlider() {
+  const p = persons[selected];
+  const cm = p ? Math.round(p.root.position.y * 100) : 0;
+  heightSlider.value = cm;
+  heightVal.textContent = cm + 'cm';
+  heightSlider.disabled = !p;
+}
+heightSlider.addEventListener('input', () => {
+  const p = persons[selected];
+  if (!p) return;
+  p.root.position.y = Number(heightSlider.value) / 100;
+  heightVal.textContent = heightSlider.value + 'cm';
+});
+
+rotSlider.addEventListener('input', () => {
+  const p = persons[selected];
+  if (!p) return;
+  p.root.rotation.y = THREE.MathUtils.degToRad(Number(rotSlider.value));
+  rotVal.textContent = rotSlider.value + '°';
+});
+
+// ---------- 画面の人をクリックで選ぶ・ドラッグで動かす ----------
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+const floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+const hitPoint = new THREE.Vector3();
+let drag = null;               // ドラッグ中の情報
+
+function setPointer(e) {
+  const r = renderer.domElement.getBoundingClientRect();
+  pointer.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+  raycaster.setFromCamera(pointer, camera);
+}
+
+// どの人・小道具に当たったかを調べる（当たった部品から、上の入れ物をたどる）
+function objectHitAt(e) {
+  setPointer(e);
+  const roots = [...persons.map(p => p.root), ...props.map(p => p.root)];
+  const hits = raycaster.intersectObjects(roots, true).filter(h => h.object !== ring);
+  if (!hits.length) return null;
+  let o = hits[0].object;
+  while (o && !roots.includes(o)) o = o.parent;
+  const pi = persons.findIndex(p => p.root === o);
+  if (pi >= 0) return { kind: 'person', i: pi, root: o, point: hits[0].point };
+  return { kind: 'prop', i: props.findIndex(p => p.root === o), root: o, point: hits[0].point };
+}
+
+// ---------- 小道具のパネル ----------
+const propList = document.getElementById('propList');
+const propRot = document.getElementById('propRot');
+const propRotVal = document.getElementById('propRotVal');
+const propRotWrap = document.getElementById('propRotWrap');
+function renderPropPanel() {
+  propList.innerHTML = '';
+  const count = { chair: 0, table: 0, roundTable: 0 };
+  props.forEach((pr, i) => {
+    count[pr.type]++;
+    const row = document.createElement('div');
+    row.className = 'person' + (selKind === 'prop' && i === selectedProp ? ' sel' : '');
+    row.innerHTML = `<span style="flex:1">${PROP_DEFS[pr.type].name}${count[pr.type]}</span>
+      <button data-del style="padding:2px 10px;font:inherit;cursor:pointer">消す</button>`;
+    row.addEventListener('click', e => {
+      if (e.target.hasAttribute('data-del')) removeProp(i);
+      else selectProp(i);
+    });
+    propList.appendChild(row);
+  });
+  document.getElementById('addChair').disabled = props.filter(p => p.type === 'chair').length >= PROP_DEFS.chair.max;
+  document.getElementById('addTable').disabled = props.filter(p => p.type === 'table').length >= PROP_DEFS.table.max;
+  document.getElementById('addRoundTable').disabled = props.filter(p => p.type === 'roundTable').length >= PROP_DEFS.roundTable.max;
+  const pr = selKind === 'prop' ? props[selectedProp] : null;
+  propRotWrap.style.display = pr ? '' : 'none';
+  if (pr) {
+    const deg = Math.round(THREE.MathUtils.radToDeg(pr.root.rotation.y));
+    propRot.value = deg;
+    propRotVal.textContent = deg + '°';
+  }
+}
+propRot.addEventListener('input', () => {
+  const pr = props[selectedProp];
+  if (!pr) return;
+  pr.root.rotation.y = THREE.MathUtils.degToRad(Number(propRot.value));
+  propRotVal.textContent = propRot.value + '°';
+});
+// 新しい小道具は、人の少し前に、ほかの小道具と重ならないよう並べて置く
+document.getElementById('addChair').addEventListener('click', () => {
+  const n = props.filter(p => p.type === 'chair').length;
+  if (addProp('chair', -1.25 + n * 0.5, 0.9)) selectProp(props.length - 1);
+});
+document.getElementById('addTable').addEventListener('click', () => {
+  const n = props.filter(p => p.type === 'table').length;
+  if (addProp('table', -1.4 + n * 1.4, -1.0)) selectProp(props.length - 1);
+});
+document.getElementById('addRoundTable').addEventListener('click', () => {
+  const n = props.filter(p => p.type === 'roundTable').length;
+  if (addProp('roundTable', -1.2 + n * 1.2, -2.1)) selectProp(props.length - 1);
+});
+
+// ---------- 関節のつまみ（ハンドル） ----------
+// つまみは「tip（先）」の位置に出す。ドラッグすると、「pivot（根元）」の骨を回して、
+// 根元→先の向きがマウスの方を向くようにする。
+// スライダー用の情報：
+//   name  … パネルに出す名前（つまみで動く部分）
+//   fwd   … 「前へ」を＋にするための向き（下向きの腕・脚は -1、上向きの首・胸は +1）
+//   side  … 「外へ（左右）」を＋にするための向き
+//   texts … 3本のスライダーの名前 [前後, ひねり, 横]
+const LIMB = ['前後に振る', 'ひねる', '横に開く'];
+const HANDLE_DEFS = [
+  { key: 'head',   pivot: 'neck',      tip: 'headTop',   label: '頭',     name: '頭（首）',     fwd: 1,  side: -1, texts: ['うなずく・そらす', '左右を向く', '左右にかしげる'] },
+  { key: 'chest',  pivot: 'spine',     tip: 'neck',      label: '胸',     name: '上半身',       fwd: 1,  side: -1, texts: ['前かがみ・そらす', 'ひねる', '左右に傾ける'] },
+  { key: 'elbowL', pivot: 'upperArmL', tip: 'lowerArmL', label: '左ひじ', name: '左の二の腕',   fwd: -1, side: 1,  texts: LIMB },
+  { key: 'handL',  pivot: 'lowerArmL', tip: 'handL',     label: '左手首', name: '左のひじから先', fwd: -1, side: 1, texts: ['曲げる', 'ひねる', '横に振る'] },
+  { key: 'elbowR', pivot: 'upperArmR', tip: 'lowerArmR', label: '右ひじ', name: '右の二の腕',   fwd: -1, side: -1, texts: LIMB },
+  { key: 'handR',  pivot: 'lowerArmR', tip: 'handR',     label: '右手首', name: '右のひじから先', fwd: -1, side: -1, texts: ['曲げる', 'ひねる', '横に振る'] },
+  { key: 'kneeL',  pivot: 'upperLegL', tip: 'lowerLegL', label: '左ひざ', name: '左の太もも',   fwd: -1, side: 1,  texts: LIMB },
+  { key: 'footL',  pivot: 'lowerLegL', tip: 'footL',     label: '左足首', name: '左のひざから下', fwd: -1, side: 1, texts: ['曲げる', 'ひねる', '横に振る'] },
+  { key: 'kneeR',  pivot: 'upperLegR', tip: 'lowerLegR', label: '右ひざ', name: '右の太もも',   fwd: -1, side: -1, texts: LIMB },
+  { key: 'footR',  pivot: 'lowerLegR', tip: 'footR',     label: '右足首', name: '右のひざから下', fwd: -1, side: -1, texts: ['曲げる', 'ひねる', '横に振る'] },
+];
+const HANDLE_COLOR = 0xfacc15, HANDLE_ACTIVE = 0xf97316, HANDLE_SELECTED = 0x22c55e;
+let selectedJoint = 'elbowL';   // スライダーで調整中の関節
+const handleGroup = new THREE.Group();
+scene.add(handleGroup);
+const handles = HANDLE_DEFS.map(def => {
+  // 体に隠れても見えるように、いつも手前に描く（depthTest: false）
+  const m = new THREE.Mesh(
+    new THREE.SphereGeometry(0.03, 16, 12),
+    new THREE.MeshBasicMaterial({ color: HANDLE_COLOR, depthTest: false, transparent: true, opacity: 0.9 })
+  );
+  m.renderOrder = 10;
+  m.userData.def = def;
+  handleGroup.add(m);
+  return m;
+});
+
+// 毎回の描画の前に、つまみを選んだ人の関節の位置に合わせる
+function updateHandles() {
+  const p = persons[selected];
+  handleGroup.visible = !!p && selKind === 'person';   // 小道具を選んでいる間は、つまみを隠す
+  if (!handleGroup.visible) return;
+  ring.position.y = 0.004 - p.root.position.y;   // 体の高さを変えても、輪はいつも床の上に出す
+  for (const h of handles) {
+    p.root.userData.bones[h.userData.def.tip].getWorldPosition(h.position);
+    if (!(drag && drag.handle === h)) {
+      h.material.color.set(h.userData.def.key === selectedJoint ? HANDLE_SELECTED : HANDLE_COLOR);
+    }
+  }
+}
+
+// ---------- 関節の細かい調整（スライダー） ----------
+const jointSel = document.getElementById('jointSel');
+const jointSliders = document.getElementById('jointSliders');
+for (const d of HANDLE_DEFS) {
+  const o = document.createElement('option');
+  o.value = d.key;
+  o.textContent = `${d.label}のつまみ（${d.name}が動く）`;
+  jointSel.appendChild(o);
+}
+jointSel.addEventListener('change', () => selectJoint(jointSel.value));
+
+// 3本のスライダー（前後・ひねり・横）を作る
+const sliderEls = ['x', 'y', 'z'].map(axis => {
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `<div class="note" style="margin:8px 0 2px"></div>
+    <div class="row"><input type="range" min="-180" max="180" step="1" value="0"><span class="val">0°</span></div>`;
+  jointSliders.appendChild(wrap);
+  const input = wrap.querySelector('input');
+  input.addEventListener('input', onSlider);
+  return { axis, label: wrap.querySelector('.note'), input, val: wrap.querySelector('.val') };
+});
+
+function currentDef() { return HANDLE_DEFS.find(d => d.key === selectedJoint); }
+
+function selectJoint(key) {
+  selectedJoint = key;
+  updateJointSliders();
+}
+
+// 骨の今の角度を読んで、スライダーに表示する
+function updateJointSliders() {
+  const def = currentDef();
+  jointSel.value = def.key;
+  const p = persons[selected];
+  const a = p ? getJointAngles(p.root, def.pivot) : { x: 0, y: 0, z: 0 };
+  // 画面の値：前後 = x×fwd、ひねり = y、横 = z×side
+  const ui = { x: a.x * def.fwd, y: a.y, z: a.z * def.side };
+  sliderEls.forEach((s, i) => {
+    s.label.textContent = def.texts[i];
+    const v = Math.round(ui[s.axis]);
+    s.input.value = v;
+    s.val.textContent = v + '°';
+    s.input.disabled = !p;
+  });
+}
+
+// スライダーを動かしたら、骨の角度に入れる
+function onSlider() {
+  const def = currentDef();
+  const p = persons[selected];
+  if (!p) return;
+  const ui = {};
+  for (const s of sliderEls) {
+    ui[s.axis] = Number(s.input.value);
+    s.val.textContent = s.input.value + '°';
+  }
+  setJointAngles(p.root, def.pivot, { x: ui.x * def.fwd, y: ui.y, z: ui.z * def.side });
+}
+
+function handleAt(e) {
+  if (!handleGroup.visible) return null;
+  setPointer(e);
+  const hits = raycaster.intersectObjects(handles, false);
+  return hits.length ? hits[0].object : null;
+}
+
+const dragPlane = new THREE.Plane();
+const _camDir = new THREE.Vector3();
+const _pivotPos = new THREE.Vector3();
+
+renderer.domElement.addEventListener('pointerdown', e => {
+  if (e.button !== 0) return;               // 左クリックだけ
+
+  // 1. つまみをつかんだら、関節を曲げる
+  const h = handleAt(e);
+  if (h) {
+    controls.enabled = false;
+    // つまみの位置を通り、カメラの方を向いた「見えない板」の上でマウスを追いかける
+    camera.getWorldDirection(_camDir);
+    dragPlane.setFromNormalAndCoplanarPoint(_camDir, h.position);
+    h.material.color.set(HANDLE_ACTIVE);
+    drag = { type: 'joint', handle: h };
+    selectJoint(h.userData.def.key);          // つまみをクリックしたら、スライダーもその関節に切り替える
+    renderer.domElement.setPointerCapture(e.pointerId);
+    return;
+  }
+
+  // 2. 人の体か小道具をつかんだら、選んで場所を動かす
+  const hit = objectHitAt(e);
+  if (!hit || hit.i < 0) return;            // 何もない所は、いつものカメラ操作
+  if (hit.kind === 'person') select(hit.i);
+  else selectProp(hit.i);
+  controls.enabled = false;                 // ドラッグ中はカメラを回さない
+  // つかんだ場所と同じ高さの「見えない水平な板」の上で動かす
+  // （床を基準にすると、遠くの床を指してしまい、大きく飛んでしまうため）
+  floorPlane.constant = -hit.point.y;
+  hitPoint.copy(hit.point);
+  drag = { type: 'move', root: hit.root, offset: hit.root.position.clone().sub(hitPoint) };
+  renderer.domElement.setPointerCapture(e.pointerId);
+}, { capture: true });
+
+renderer.domElement.addEventListener('pointermove', e => {
+  if (!drag) return;
+  setPointer(e);
+  if (drag.type === 'move') {
+    if (raycaster.ray.intersectPlane(floorPlane, hitPoint)) {
+      const root = drag.root;
+      root.position.x = hitPoint.x + drag.offset.x;
+      root.position.z = hitPoint.z + drag.offset.z;
+    }
+  } else if (drag.type === 'joint') {
+    if (!raycaster.ray.intersectPlane(dragPlane, hitPoint)) return;
+    const def = drag.handle.userData.def;
+    const bones = persons[selected].root.userData.bones;
+    const pivot = bones[def.pivot], tip = bones[def.tip];
+    pivot.getWorldPosition(_pivotPos);
+    const dir = hitPoint.clone().sub(_pivotPos);
+    if (dir.lengthSq() > 1e-6) aimBone(pivot, tip, dir);
+    updateJointSliders();                     // マウスで曲げた角度を、スライダーにも反映する
+  }
+});
+
+function endDrag() {
+  if (drag && drag.type === 'joint') drag.handle.material.color.set(HANDLE_COLOR);
+  drag = null;
+  controls.enabled = true;
+}
+
+// 選んだ人のポーズを、最初の姿勢に戻す
+function resetPose(root) {
+  for (const [bone, q] of root.userData.rest) bone.quaternion.copy(q);
+  root.position.y = 0;
+  root.userData.hands = { L: 'open', R: 'open' };
+}
+
+// ---------- 手の形のボタン ----------
+const handRows = document.getElementById('handRows');
+const handSegs = {};
+for (const side of ['L', 'R']) {
+  const row = document.createElement('div');
+  row.className = 'row';
+  row.style.cssText = 'margin-bottom:8px;align-items:flex-start';
+  row.innerHTML = `<span style="width:2.6em;flex:none;padding-top:6px">${side === 'L' ? '左手' : '右手'}</span>
+    <div class="presets" style="flex:1">${Object.entries(HAND_SHAPES)
+      .map(([k, s]) => `<button data-h="${k}" style="font-size:12px">${s.name}</button>`).join('')}</div>`;
+  const seg = row.querySelector('.presets');
+  seg.addEventListener('click', e => {
+    const shape = e.target.dataset.h;
+    const p = persons[selected];
+    if (!shape || !p) return;
+    setHand(p.root, side, shape);
+    updateHandButtons();
+  });
+  handSegs[side] = seg;
+  handRows.appendChild(row);
+}
+function updateHandButtons() {
+  const p = persons[selected];
+  for (const side of ['L', 'R']) {
+    const now = p ? p.root.userData.hands[side] : '';
+    for (const b of handSegs[side].children) b.classList.toggle('on', b.dataset.h === now);
+  }
+}
+document.getElementById('resetPose').addEventListener('click', () => {
+  const p = persons[selected];
+  if (!p) return;
+  resetPose(p.root);
+  updateJointSliders();
+  updateHeightSlider();
+  updateHandButtons();
+});
+
+// いちばん低い所（足の裏・おしりなど）が床にぴったり付くよう、体の高さを合わせる
+function groundPerson(root) {
+  const ringParent = ring.parent;
+  ring.removeFromParent();                  // 輪は高さの計算に入れない
+  root.position.y = 0;
+  root.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(root, true);   // 骨で動かしたあとの形で測る
+  root.position.y = -box.min.y;
+  if (ringParent) ringParent.add(ring);
+}
+document.getElementById('groundBtn').addEventListener('click', () => {
+  const p = persons[selected];
+  if (p) groundPerson(p.root);
+  updateHeightSlider();
+});
+
+// ---------- 用意したポーズ ----------
+// 値はスライダーと同じ [前後, ひねり, 横]（度）。書いていない関節は気をつけのまま。
+//   腕・脚の「前後」… ＋で前へ／「横」… ＋で外へ開く
+//   ひじから先の「曲げる」… ＋でひじを曲げる／ひざから下の「曲げる」… −でひざを曲げる
+const PRESETS = [
+  { name: '気をつけ', joints: {} },
+  { name: '自然に立つ', joints: {
+    head: [0, 15, 8], chest: [0, 8, -4],
+    elbowL: [8, 0, -6], handL: [20, 0, 0], elbowR: [-8, 0, -4], handR: [15, 0, 0],
+    kneeL: [18, 0, 8], footL: [-28, 0, 0], kneeR: [0, 0, -3],
+  } },
+  { name: '歩く', joints: {
+    elbowL: [-20, 0, -5], handL: [15, 0, 0], elbowR: [25, 0, -5], handR: [25, 0, 0],
+    kneeL: [25, 0, 0], footL: [-8, 0, 0], kneeR: [-15, 0, 0], footR: [-20, 0, 0],
+  } },
+  { name: '走る', hands: { L: 'fist', R: 'fist' }, joints: {
+    head: [-8, 0, 0], chest: [12, 0, 0],
+    elbowL: [-40, 0, 10], handL: [90, 0, 0], elbowR: [50, 0, 10], handR: [90, 0, 0],
+    kneeL: [60, 0, 0], footL: [-90, 0, 0], kneeR: [-25, 0, 0], footR: [-40, 0, 0],
+  } },
+  { name: '指をさす', hands: { R: 'point' }, joints: {
+    head: [0, -15, 0], chest: [0, -10, 0],
+    elbowR: [80, 0, 15], handR: [5, 0, 0],
+  } },
+  { name: '手を振る', joints: {
+    head: [0, 0, -5],
+    elbowR: [10, 0, 80], handR: [0, 0, 70],
+  } },
+  { name: '腰に手', joints: {
+    elbowL: [-10, 0, 40], handL: [0, 0, -100], elbowR: [-10, 0, 40], handR: [0, 0, -100],
+  } },
+  { name: '椅子に座る', joints: {
+    elbowL: [25, 0, -5], handL: [25, 0, 0], elbowR: [25, 0, -5], handR: [25, 0, 0],
+    kneeL: [90, 0, 5], footL: [-90, 0, 0], kneeR: [90, 0, 5], footR: [-90, 0, 0],
+  } },
+  // 体育座り：両手をすねの前で組む（腕の角度は、男女どちらでも両手が合う値を計算で探した）
+  { name: '体育座り', hands: { L: 'fist', R: 'fist' }, joints: {
+    head: [10, 0, 0], chest: [25, 0, 0],
+    elbowL: [65, 0, 5], handL: [10, 0, -50], elbowR: [65, 0, 5], handR: [10, 0, -50],
+    kneeL: [130, 0, 8], footL: [-105, 0, 0], kneeR: [130, 0, 8], footR: [-105, 0, 0],
+  } },
+];
+
+function applyPreset(root, preset) {
+  resetPose(root);
+  for (const [key, ui] of Object.entries(preset.joints)) {
+    const def = HANDLE_DEFS.find(d => d.key === key);
+    // スライダーの値（前後・ひねり・横）を、骨の角度に直して入れる
+    setJointAngles(root, def.pivot, { x: ui[0] * def.fwd, y: ui[1], z: ui[2] * def.side });
+  }
+  for (const [side, shape] of Object.entries(preset.hands || {})) setHand(root, side, shape);
+  groundPerson(root);
+}
+
+const presetBtns = document.getElementById('presetBtns');
+for (const preset of PRESETS) {
+  const b = document.createElement('button');
+  b.textContent = preset.name;
+  b.addEventListener('click', () => {
+    const p = persons[selected];
+    if (!p) return;
+    applyPreset(p.root, preset);
+    updateJointSliders();
+    updateHeightSlider();
+    updateHandButtons();
+  });
+  presetBtns.appendChild(b);
+}
+renderer.domElement.addEventListener('pointerup', endDrag);
+renderer.domElement.addEventListener('pointercancel', endDrag);
+renderer.domElement.addEventListener('lostpointercapture', endDrag);   // 念のため：マウスを見失ったときも終わらせる
+
+// 最初は1人（男性）
+await enqueue(() => setCount(1));
+document.getElementById('loading').remove();
+
+// ---------- 画像の保存 ----------
+const ASPECTS = { '16:9': 16 / 9, '9:16': 9 / 16, '1:1': 1 };
+const LONG_SIDE = 1920;          // 保存する画像の長いほうの辺（ピクセル）
+let aspect = '16:9', format = 'png';
+const frameEl = document.getElementById('frame');
+const FRAME_MARGIN = 12;         // 枠と画面のふちのすき間
+
+// 画面の中に、選んだ比率で入る一番大きな枠を計算する
+function frameRect() {
+  const w = view.clientWidth, h = view.clientHeight;
+  const A = ASPECTS[aspect];
+  let fw = w - FRAME_MARGIN * 2, fh = fw / A;
+  if (fh > h - FRAME_MARGIN * 2) { fh = h - FRAME_MARGIN * 2; fw = fh * A; }
+  return { x: (w - fw) / 2, y: (h - fh) / 2, w: fw, h: fh, viewH: h };
+}
+function updateFrame() {
+  const r = frameRect();
+  Object.assign(frameEl.style, { left: r.x + 'px', top: r.y + 'px', width: r.w + 'px', height: r.h + 'px' });
+}
+
+function setSeg(box, attr, value) {
+  for (const b of box.children) b.classList.toggle('on', b.dataset[attr] === value);
+}
+const aspectBtns = document.getElementById('aspectBtns');
+aspectBtns.addEventListener('click', e => {
+  if (!e.target.dataset.a) return;
+  aspect = e.target.dataset.a;
+  setSeg(aspectBtns, 'a', aspect);
+  updateFrame();
+});
+const formatBtns = document.getElementById('formatBtns');
+formatBtns.addEventListener('click', e => {
+  if (!e.target.dataset.f) return;
+  format = e.target.dataset.f;
+  setSeg(formatBtns, 'f', format);
+});
+
+// 背景の色は、画面にもすぐ反映する
+document.getElementById('bgColor').addEventListener('input', e => {
+  scene.background.set(e.target.value);
+});
+document.getElementById('showFloor').addEventListener('change', e => {
+  floor.visible = grid.visible = e.target.checked;
+  shadowFloor.visible = !e.target.checked;
+});
+
+document.getElementById('saveImage').addEventListener('click', () => {
+  const A = ASPECTS[aspect];
+  const W = A >= 1 ? LONG_SIDE : Math.round(LONG_SIDE * A);
+  const H = A >= 1 ? Math.round(LONG_SIDE / A) : LONG_SIDE;
+
+  // 枠の中と同じ範囲が写るカメラを作る
+  // （枠の高さが画面の何割かに合わせて、写す角度をせまくする）
+  const r = frameRect();
+  const shot = camera.clone();
+  const half = THREE.MathUtils.degToRad(camera.fov / 2);
+  shot.fov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(half) * r.h / r.viewH));
+  shot.aspect = W / H;
+  shot.updateProjectionMatrix();
+
+  // つまみと輪を隠して、大きなサイズで1回だけ描いて保存する
+  const ringParent = ring.parent;
+  ring.removeFromParent();
+  handleGroup.visible = false;
+  const ratio = renderer.getPixelRatio();
+  renderer.setPixelRatio(1);
+  renderer.setSize(W, H, false);
+  renderer.render(scene, shot);
+  const mime = format === 'jpg' ? 'image/jpeg' : 'image/png';
+  const url = renderer.domElement.toDataURL(mime, 0.92);
+
+  // 元に戻す
+  renderer.setPixelRatio(ratio);
+  if (ringParent) ringParent.add(ring);
+  resize();
+
+  download(url, `pose_${timestamp()}.${format}`);
+});
+
+// 今の日時を「20261122_074036」の形にする（ファイル名用）
+function timestamp() {
+  const t = new Date(), z = n => String(n).padStart(2, '0');
+  return `${t.getFullYear()}${z(t.getMonth() + 1)}${z(t.getDate())}_${z(t.getHours())}${z(t.getMinutes())}${z(t.getSeconds())}`;
+}
+function download(url, name) {
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+}
+
+// ---------- ポーズの保存・読み込み ----------
+// 骨の回転は、骨の名前ごとに [x, y, z, w]（クォータニオン＝回転を表す4つの数）で残す
+const bgColorEl = document.getElementById('bgColor');
+const showFloorEl = document.getElementById('showFloor');
+const r4 = v => Math.round(v * 1e5) / 1e5;   // ファイルが長くならないよう、小数点以下5けたにそろえる
+
+function poseData() {
+  return {
+    app: '3Dモデル指示ツール',
+    version: 1,
+    persons: persons.map(p => {
+      const bones = {};
+      for (const [bone] of p.root.userData.rest) bones[bone.name] = bone.quaternion.toArray().map(r4);
+      return {
+        gender: p.gender,
+        position: [r4(p.root.position.x), r4(p.root.position.z)],
+        height: r4(p.root.position.y),     // 座るポーズなどで下げた体の高さ
+        hands: p.root.userData.hands,      // 手の形（ボタンの表示用。指の角度は bones に入っている）
+        rotation: Math.round(THREE.MathUtils.radToDeg(p.root.rotation.y)),
+        bones,
+      };
+    }),
+    props: props.map(pr => ({
+      type: pr.type,
+      position: [r4(pr.root.position.x), r4(pr.root.position.z)],
+      rotation: Math.round(THREE.MathUtils.radToDeg(pr.root.rotation.y)),
+    })),
+    camera: { position: camera.position.toArray().map(r4), target: controls.target.toArray().map(r4) },
+    image: { aspect, format, background: bgColorEl.value, floor: showFloorEl.checked },
+  };
+}
+
+document.getElementById('savePose').addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify(poseData(), null, 1)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  download(url, `pose_${timestamp()}.json`);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
+
+async function applyPose(data) {
+  if (!data || !Array.isArray(data.persons) || data.persons.length < 1 || data.persons.length > 3) {
+    throw new Error('このツールで保存したファイルではないようです');
+  }
+  // いったん全員を消して、保存したとおりに作り直す
+  while (persons.length) scene.remove(persons.pop().root);
+  for (const d of data.persons) {
+    const gender = d.gender === 'female' ? 'female' : 'male';
+    const root = await createPerson(gender);
+    root.position.set(d.position[0], Number(d.height) || 0, d.position[1]);
+    root.rotation.y = THREE.MathUtils.degToRad(d.rotation || 0);
+    for (const [bone] of root.userData.rest) {
+      const q = d.bones && d.bones[bone.name];
+      if (q) bone.quaternion.fromArray(q).normalize();
+    }
+    if (d.hands) {
+      for (const side of ['L', 'R']) if (HAND_SHAPES[d.hands[side]]) root.userData.hands[side] = d.hands[side];
+    }
+    scene.add(root);
+    persons.push({ root, gender });
+  }
+  // 小道具も、保存したとおりに置き直す（小道具が無い古いファイルなら、何も置かない）
+  clearProps();
+  for (const d of Array.isArray(data.props) ? data.props : []) {
+    if (!PROP_DEFS[d.type] || !Array.isArray(d.position)) continue;
+    addProp(d.type, Number(d.position[0]) || 0, Number(d.position[1]) || 0, Number(d.rotation) || 0);
+  }
+  if (data.camera) {
+    camera.position.fromArray(data.camera.position);
+    controls.target.fromArray(data.camera.target);
+    controls.update();
+  }
+  if (data.image) {
+    const im = data.image;
+    if (ASPECTS[im.aspect]) { aspect = im.aspect; setSeg(aspectBtns, 'a', aspect); updateFrame(); }
+    if (im.format === 'png' || im.format === 'jpg') { format = im.format; setSeg(formatBtns, 'f', format); }
+    if (im.background) { bgColorEl.value = im.background; scene.background.set(im.background); }
+    if (typeof im.floor === 'boolean') {
+      showFloorEl.checked = im.floor;
+      floor.visible = grid.visible = im.floor;
+      shadowFloor.visible = !im.floor;
+    }
+  }
+  selected = 0;
+  selKind = 'person';
+  updateSelection();
+}
+
+const poseFile = document.getElementById('poseFile');
+document.getElementById('loadPose').addEventListener('click', () => poseFile.click());
+poseFile.addEventListener('change', async () => {
+  const file = poseFile.files[0];
+  poseFile.value = '';             // 同じファイルをもう一度選んでも読み込めるようにする
+  if (!file) return;
+  try {
+    const data = JSON.parse(await file.text());
+    await enqueue(() => applyPose(data).catch(err => alert('読み込めませんでした：' + err.message)));
+  } catch (err) {
+    alert('読み込めませんでした：ファイルの中身が正しくありません');
+  }
+});
+
+// ---------- glb の書き出し ----------
+// 今のポーズのまま人をコピーして、書き出し用の場面にまとめる。
+// 素体の作者名も、ファイルの中の説明欄（extras）に入れておく。
+const exportBtn = document.getElementById('exportGlb');
+exportBtn.addEventListener('click', async () => {
+  if (!persons.length) return;
+  exportBtn.disabled = true;
+  exportBtn.textContent = '書き出し中…';
+  const ringParent = ring.parent;
+  ring.removeFromParent();                  // 選択の輪は入れない
+  try {
+    const out = new THREE.Scene();
+    out.name = '3Dモデル指示ツール';
+    out.userData = {
+      credit: [
+        '女性素体「【無料】MMD用女性素体（リグ付き）」射当ユウキ（プリメロ工房） https://booth.pm/ja/items/1958825',
+        '男性素体「ローポリ 男性 FBX素体」柚木零（柚木零の店） https://booth.pm/ja/items/3501696',
+        'どちらも加工して使用',
+      ],
+    };
+    persons.forEach((p, i) => {
+      const c = SkeletonUtils.clone(p.root);
+      c.name = `${i + 1}人目_${p.gender === 'male' ? '男性' : '女性'}`;
+      c.traverse(o => { if (o.isMesh) o.material = o.material.clone(); });
+      out.add(c);
+    });
+    const count = { chair: 0, table: 0, roundTable: 0 };
+    props.forEach(pr => {
+      const c = pr.root.clone();
+      c.name = `${PROP_DEFS[pr.type].name}${++count[pr.type]}`;
+      out.add(c);
+    });
+    const exporter = new GLTFExporter();
+    const glb = await exporter.parseAsync(out, { binary: true });
+    const url = URL.createObjectURL(new Blob([glb], { type: 'model/gltf-binary' }));
+    download(url, `pose_${timestamp()}.glb`);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (err) {
+    console.error(err);
+    alert('書き出せませんでした：' + err.message);
+  } finally {
+    if (ringParent) ringParent.add(ring);
+    exportBtn.disabled = false;
+    exportBtn.textContent = 'glb で書き出す';
+  }
+});
+
+// ---------- 画面の大きさに合わせる ----------
+function resize() {
+  const w = view.clientWidth, h = view.clientHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  updateFrame();
+}
+window.addEventListener('resize', resize);
+resize();
+
+renderer.setAnimationLoop(() => {
+  controls.update();
+  updateHandles();
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>
